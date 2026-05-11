@@ -29,6 +29,8 @@
 - [架构图](#129-架构图)
 - [Benchmark Report](#1211-benchmark-report)
 - [Prometheus 与 Grafana](#1212-prometheus-与-grafana)
+- [面试讲稿](./docs/interview-guide.md)
+- [简历材料](./docs/resume-bullets.md)
 
 ## 快速开始
 
@@ -69,9 +71,11 @@ cmake --build build
 
 - 基于 Redis 作为中心状态存储，实现多实例共享限流配额
 - 基于 Lua 脚本封装 Redis 原子操作，并通过 `SCRIPT LOAD + EVALSHA` 缓存脚本，保证并发场景下状态更新一致性
+- 使用 Redis `TIME` 作为统一时间源，避免多实例本地时钟不一致导致窗口判断和令牌补充偏差
 - 使用 C++ 封装 Redis 连接池，降低频繁建连带来的开销
 - 同时实现滑动窗口和令牌桶两种限流算法，便于覆盖不同场景下的策略选择
 - 通过 `pybind11` 提供 Python 调用接口，方便接入 Python 服务
+- Python 绑定层对阻塞 Redis 调用释放 GIL，降低 Python Web 服务多线程场景下的互相阻塞
 - 提供 Redis 故障降级方案，在 Redis 不可用时支持本地限流、放行或拒绝，并显式返回 `backend_status`
 - 提供 FastAPI 接入样例、Prometheus 风格指标、Docker 冒烟测试、`pytest`、CI 和压测断言，形成完整工程闭环
 
@@ -110,6 +114,9 @@ cmake --build build
 │   ├── benchmark.py
 │   ├── test_integration.py
 │   └── verify_functionality.py
+├── docs/
+│   ├── interview-guide.md
+│   └── resume-bullets.md
 └── examples/
     ├── fastapi_demo.py
     └── python_demo.py
@@ -208,8 +215,13 @@ cmake --build build
 - 支持 Redis 认证
 - 支持选择 DB
 - 支持健康检查
+- 支持连接创建和重连失败重试
 - 支持连接池大小调整
 - 支持统计信息导出
+
+`RedisConfig.max_retries` 用于 Redis 连接创建和重连阶段。限流脚本执行后如果客户端丢失响应，是否已经扣减配额无法确定，因此实现不会盲目重放已经发出的限流写命令，避免重复消耗配额。
+
+健康检查会把空闲连接取出后在锁外执行 `PING`，再把健康连接放回池中，避免网络探测期间长时间阻塞业务线程获取连接。
 
 这个模块体现的是工程能力，而不仅仅是算法能力。
 
@@ -233,6 +245,7 @@ cmake --build build
 实现思路：
 
 - 使用 Redis `ZSET` 保存请求时间戳
+- Lua 脚本内部通过 Redis `TIME` 获取统一毫秒时间
 - 每次请求到来时先清理过期数据
 - 再统计当前窗口内请求数
 - 如果没有超限，则插入本次请求时间戳
@@ -270,7 +283,7 @@ cmake --build build
   - 当前令牌数
   - 上次补充时间
 - 每次请求到来时：
-  - 先根据时间差补充令牌
+  - 先基于 Redis `TIME` 计算时间差并补充令牌
   - 再判断是否足够扣减
   - 最后返回剩余令牌和建议重试时间
 - 整个过程通过 Lua 脚本一次完成，保证原子性，并优先走 `EVALSHA`
@@ -490,6 +503,7 @@ cfg = redis_limiter.RedisConfig()
 cfg.host = "127.0.0.1"
 cfg.port = 6379
 cfg.pool_size = 8
+cfg.max_retries = 1
 
 pool = redis_limiter.RedisPool(cfg)
 limiter = redis_limiter.TokenBucketLimiter(
@@ -511,6 +525,7 @@ cfg = redis_limiter.RedisConfig()
 cfg.host = "127.0.0.1"
 cfg.port = 6379
 cfg.pool_size = 8
+cfg.max_retries = 1
 
 pool = redis_limiter.RedisPool(cfg)
 remote = redis_limiter.TokenBucketLimiter(
@@ -622,6 +637,7 @@ docker compose run --rm pytest
 - 令牌桶容量耗尽后拒绝请求
 - Redis 不可用时自动进入本地降级
 - FastAPI `/healthz` 和 `/rate-limit/check` 接口
+- FastAPI `/sms/send-code` 短信验证码防刷接口
 - FastAPI 接口在 Redis 故障时暴露降级状态
 
 运行 Docker 冒烟测试：
@@ -633,7 +649,7 @@ docker compose run --rm smoke
 覆盖范围：
 
 - app 容器健康检查
-- `/healthz`、`/rate-limit/check`、`/metrics` 端到端链路
+- `/healthz`、`/rate-limit/check`、`/sms/send-code`、`/metrics` 端到端链路
 - `backend_status` 与 Prometheus 指标输出
 
 ---
@@ -743,12 +759,12 @@ PASS resilient fallback
 `pytest` 集成测试结果：
 
 ```text
-5 passed in 71.06s (0:01:11)
+9 passed in 0.53s
 ```
 
 结论：
 
-- HTTP 接入样例、基础限流、故障降级、指标导出四条主路径都已经纳入回归测试
+- HTTP 接入样例、基础限流、短信验证码防刷、故障降级、指标导出五条主路径都已经纳入回归测试
 - 当前镜像下，`pytest` 集成测试全部通过
 
 Docker 冒烟测试结果：
@@ -759,7 +775,7 @@ PASS docker smoke
 
 结论：
 
-- app 在容器网络内可正常提供 `/healthz`、`/rate-limit/check`、`/metrics`
+- app 在容器网络内可正常提供 `/healthz`、`/rate-limit/check`、`/sms/send-code`、`/metrics`
 - 冒烟测试已覆盖 `backend_status` 与指标暴露的最短验证路径
 
 ### 12.6.2 吞吐压测结果
@@ -768,8 +784,8 @@ PASS docker smoke
 
 | 场景 | Workers | 时长 | 总请求数 | QPS | Avg 延迟(us) | P95(us) | P99(us) | Errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 独立 key | 4 | 5s | 62945 | 12589.00 | 316.24 | 571.30 | 823.68 | 0 |
-| 热点 key | 4 | 5s | 64957 | 12991.40 | 304.11 | 447.45 | 751.25 | 0 |
+| 独立 key | 4 | 5s | 35278 | 7055.60 | 559.81 | 928.17 | 2769.85 | 0 |
+| 热点 key | 4 | 5s | 97376 | 19475.20 | 215.67 | 329.48 | 653.82 | 0 |
 
 QPS 对比图：
 
@@ -783,24 +799,24 @@ P95 延迟对比图：
 
 ```text
 workers=4 duration_s=5.00 shared_key=False
-requests=62945 allowed=62945 denied=0 errors=0 qps=12589.00
-latency_us avg=316.24 p50=290.02 p95=571.30 p99=823.68
+requests=35278 allowed=35278 denied=0 errors=0 qps=7055.60
+latency_us avg=559.81 p50=532.30 p95=928.17 p99=2769.85
 ```
 
 4 个 worker，5 秒，共享热点 key：
 
 ```text
 workers=4 duration_s=5.00 shared_key=True
-requests=64957 allowed=64957 denied=0 errors=0 qps=12991.40
-latency_us avg=304.11 p50=295.77 p95=447.45 p99=751.25
+requests=97376 allowed=97376 denied=0 errors=0 qps=19475.20
+latency_us avg=215.67 p50=170.40 p95=329.48 p99=653.82
 ```
 
 结论：
 
-- 当前容器环境下，令牌桶调用吞吐在约 `12.6k` 到 `13.0k QPS`
+- 当前容器环境下，令牌桶调用吞吐在约 `7.1k` 到 `19.5k QPS`
 - 热点 key 场景下没有观察到异常错误或明显的延迟失控
 - 这组压测参数主要用于看吞吐，不用于判断限流是否严格生效
-- 当前这组数据里，共享热点 key 没有比独立 key 更差，说明瓶颈暂时不在 Redis key 冲突上
+- 当前这组数据里，共享热点 key 高于独立 key；短压测结果会受 Docker 环境、Redis 状态和 worker 调度影响
 
 ### 12.6.3 限流有效性压测结果
 
@@ -808,7 +824,7 @@ latency_us avg=304.11 p50=295.77 p95=447.45 p99=751.25
 
 | 场景 | Workers | 时长 | Max Tokens | Refill Rate | 理论放行 | 实际放行 | 超发量 | 超发比例 | 拒绝率 | 断言结果 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 热点 key 有效性压测 | 4 | 5s | 20 | 5/s | 45.00 | 45 | 0.00 | 0.000000 | 0.9991 | PASS |
+| 热点 key 有效性压测 | 4 | 5s | 20 | 5/s | 45.00 | 45 | 0.00 | 0.000000 | 0.9995 | PASS |
 
 限流效果图：
 
@@ -822,12 +838,12 @@ latency_us avg=304.11 p50=295.77 p95=447.45 p99=751.25
 
 ```text
 workers=4 duration_s=5.00 shared_key=True
-requests=47560 allowed=45 denied=47515 errors=0 qps=9512.00
+requests=92941 allowed=45 denied=92896 errors=0 qps=18588.20
 effectiveness theoretical_allowed=45.00 actual_allowed=45 over_issued=0.00
 effectiveness over_issued_ratio=0.000000 max_over_issue=0.00 max_over_issue_ratio=0.000000
-effectiveness allowed_ratio=0.0009 denied_ratio=0.9991
+effectiveness allowed_ratio=0.0005 denied_ratio=0.9995
 PASS effectiveness assertion
-latency_us avg=427.13 p50=352.07 p95=846.10 p99=1634.98
+latency_us avg=209.75 p50=181.09 p95=316.83 p99=703.72
 ```
 
 结论：
@@ -859,7 +875,7 @@ Client
   -> 返回业务结果
 ```
 
-在示例里，数据库部分由 `FakeOrderRepository` 模拟，后端名默认显示为 `mock-postgresql`。
+在示例里，数据库部分由 `FakeOrderRepository` 模拟，后端名默认显示为 `mock-postgresql`；短信发送部分由 `FakeSmsGateway` 模拟，后端名默认显示为 `mock-sms-gateway`。
 
 启动方式：
 
@@ -889,6 +905,22 @@ curl -sS http://127.0.0.1:8000/orders \
   -d '{"user_id":"42","sku":"sku-demo","quantity":1}'
 ```
 
+请求短信验证码接口：
+
+```bash
+curl -sS http://127.0.0.1:8000/sms/send-code \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800000000","user_id":"42","scene":"login"}'
+```
+
+短信验证码示例按三个维度做防刷：
+
+- 同一手机号：默认 `60s` 约 `1` 次
+- 同一用户：默认 `1h` 约 `5` 次
+- 同一 IP：默认 `1min` 约 `20` 次
+
+任何一个维度被拒绝都会返回 HTTP `429`，响应里包含 `blocked_rule`、`retry_after_ms`、`backend_status` 和 fallback 计数。
+
 接口说明：
 
 - `GET /healthz`
@@ -899,6 +931,8 @@ curl -sS http://127.0.0.1:8000/orders \
   返回 `allowed`、`remaining`、`retry_after_ms`、`backend_status`、`redis_error_count`、`fallback_hit_count`
 - `POST /orders`
   先按 `user:{user_id}:create_order` 执行限流，放行后再模拟订单创建和持久化，返回业务结果和嵌套的 `rate_limit` 信息
+- `POST /sms/send-code`
+  先按手机号、用户、IP 三个维度依次限流，全部通过后再模拟调用短信网关，适合讲“验证码接口防刷”的业务闭环
 
 查看指标：
 
@@ -953,6 +987,7 @@ CI 配置文件在 [.github/workflows/ci.yml](/Users/mac/Desktop/redis-rate-limi
                 |          FastAPI App          |
                 | /healthz /metrics             |
                 | /rate-limit/check /orders     |
+                | /sms/send-code                |
                 +---------------+---------------+
                                 |
                                 v
@@ -984,13 +1019,14 @@ CI 配置文件在 [.github/workflows/ci.yml](/Users/mac/Desktop/redis-rate-limi
                                   v
                     +---------------------------+
                     |      Business Logic       |
-                    |    create order flow      |
+                    | order / sms code flows    |
                     +-------------+-------------+
                                   |
                                   v
                     +---------------------------+
-                    | Mock PostgreSQL / DB      |
+                    | Mock DB / SMS Gateway     |
                     | FakeOrderRepository       |
+                    | FakeSmsGateway            |
                     +---------------------------+
 
 Redis 不可用时：
@@ -1000,7 +1036,7 @@ FastAPI -> ResilientTokenBucketLimiter -> LocalTokenBucket / FailOpen / FailClos
 这张图主要说明三件事：
 
 - Python 服务怎么接入 C++ 扩展
-- 真实业务里为什么应该先限流再访问数据库
+- 真实业务里为什么应该先限流再访问数据库或短信网关
 - Redis 异常时为什么还能保留单机限流保护
 
 ---
@@ -1011,7 +1047,7 @@ FastAPI -> ResilientTokenBucketLimiter -> LocalTokenBucket / FailOpen / FailClos
 
 - 基于 `C++17 + hiredis + Redis Lua + pybind11` 实现分布式限流组件，支持滑动窗口、令牌桶和 Redis 故障降级，并提供 Python 服务接入能力。
 - 设计 `ResilientTokenBucketLimiter`，在 Redis 不可用时自动切换本地令牌桶，平衡全局一致性与服务可用性，并显式暴露 `backend_status`。
-- 封装 FastAPI 接入样例、Docker 冒烟测试、`pytest` 集成测试、GitHub Actions 和 Docker Compose 验证链路，补齐从组件实现到业务接入、回归测试、性能验证的工程闭环。
+- 封装 FastAPI 接入样例，覆盖订单创建和短信验证码防刷两个业务入口，并通过 Docker 冒烟测试、`pytest` 集成测试、GitHub Actions 和 Docker Compose 验证链路补齐工程闭环。
 - 在 4 worker、热点 key 的严格有效性压测下，理论放行 `45` 次、实际放行 `45` 次，`over_issued=0`，验证分布式限流逻辑未发生超发。
 
 如果要压缩成一句话，可以写成：
@@ -1104,6 +1140,21 @@ Dashboard 主要观察：
 - [grafana/dashboards/redis-rate-limiter-dashboard.json](/Users/mac/Desktop/redis-rate-limiter/grafana/dashboards/redis-rate-limiter-dashboard.json)
 
 这部分的价值在于，它把“有 metrics”提升成“可以直接观察 dashboard 和完整可观测性链路”。
+
+---
+
+## 12.13 生产边界与改进方向
+
+当前项目已经覆盖分布式配额共享、Redis Lua 原子更新、故障降级、Python 接入和基础可观测性，但仍然有明确边界：
+
+- 单 Redis 部署会成为热点 key 场景下的吞吐瓶颈，后续可以补 Redis Cluster / Sentinel 接入。
+- 本地 fallback 只能保证单实例限流，多实例 Redis 故障时无法继续保证全局一致配额。
+- 短信验证码 demo 的手机号、用户、IP 三个维度是顺序检查，适合业务接入演示；如果要做到多维配额 all-or-nothing，需要进一步合并成 Redis Lua 多 key 原子脚本。
+- 滑动窗口依赖 ZSET 保存窗口内请求记录，高 QPS 长窗口会带来更高内存和清理成本。
+- 当前配置主要通过构造参数和环境变量传入，后续可以接配置中心、动态规则和灰度发布。
+- 压测报告覆盖了基础吞吐和严格有效性断言，后续可以补长时间压测、Redis 抖动、网络延迟和恢复回切场景。
+
+这些边界适合作为面试中的主动说明：项目当前定位是可接入的轻量组件，而不是完整生产级限流平台。
 
 ---
 

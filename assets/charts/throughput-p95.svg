@@ -25,10 +25,10 @@
 
   <g font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#756452">
     <text x="78" y="324">0</text>
-    <text x="64" y="278">200</text>
-    <text x="64" y="232">400</text>
-    <text x="64" y="186">600</text>
-    <text x="64" y="140">800</text>
+    <text x="64" y="278">250</text>
+    <text x="64" y="232">500</text>
+    <text x="64" y="186">750</text>
+    <text x="58" y="140">1000</text>
   </g>
 
   <g stroke="#ebe1d3" stroke-width="1">
@@ -38,12 +38,12 @@
     <line x1="120" y1="136" x2="792" y2="136"/>
   </g>
 
-  <rect x="220" y="188.6" width="160" height="131.4" rx="20" fill="url(#barA)"/>
-  <rect x="532" y="217.1" width="160" height="102.9" rx="20" fill="url(#barB)"/>
+  <rect x="220" y="149.2" width="160" height="170.8" rx="20" fill="url(#barA)"/>
+  <rect x="532" y="259.4" width="160" height="60.6" rx="20" fill="url(#barB)"/>
 
   <g font-family="Helvetica, Arial, sans-serif" fill="#2e261e">
-    <text x="300" y="177" text-anchor="middle" font-size="20">571.30 us</text>
-    <text x="612" y="205" text-anchor="middle" font-size="20">447.45 us</text>
+    <text x="300" y="138" text-anchor="middle" font-size="20">928.17 us</text>
+    <text x="612" y="248" text-anchor="middle" font-size="20">329.48 us</text>
     <text x="300" y="351" text-anchor="middle" font-size="16">independent-key</text>
     <text x="612" y="351" text-anchor="middle" font-size="16">shared-key</text>
   </g>

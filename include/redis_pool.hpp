@@ -11,6 +11,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace rrl {
@@ -36,14 +37,16 @@ struct RedisConfig {
 // Redis连接包装器(RAII管理)
 class RedisConnection {
 public:
-    explicit RedisConnection(redisContext* ctx = nullptr) : ctx_(ctx) {}
-    ~RedisConnection() { close(); }
+    explicit RedisConnection(redisContext* ctx = nullptr);
+    RedisConnection(redisContext* ctx, const RedisConfig& config);
+    ~RedisConnection();
 
     // 禁用拷贝，允许移动
     RedisConnection(const RedisConnection&) = delete;
     RedisConnection& operator=(const RedisConnection&) = delete;
 
-    RedisConnection(RedisConnection&& other) noexcept : ctx_(other.ctx_) {
+    RedisConnection(RedisConnection&& other) noexcept
+        : ctx_(other.ctx_), config_(std::move(other.config_)) {
         other.ctx_ = nullptr;
     }
 
@@ -51,6 +54,7 @@ public:
         if (this != &other) {
             close();
             ctx_ = other.ctx_;
+            config_ = std::move(other.config_);
             other.ctx_ = nullptr;
         }
         return *this;
@@ -60,28 +64,18 @@ public:
     redisContext* raw() const { return ctx_; }
 
     // 执行命令并返回回复(RAII自动释放)
-    RedisReplyPtr execute(const char* format, ...) {
-        va_list ap;
-        va_start(ap, format);
-        redisReply* reply = (redisReply*)redisvCommand(ctx_, format, ap);
-        va_end(ap);
-        return RedisReplyPtr(reply, free_redis_reply);
-    }
+    RedisReplyPtr execute(const char* format, ...);
 
     // 执行命令(参数列表版本)
-    RedisReplyPtr execute(int argc, const char** argv, const size_t* argvlen) {
-        redisReply* reply = (redisReply*)redisCommandArgv(ctx_, argc, argv, argvlen);
-        return RedisReplyPtr(reply, free_redis_reply);
-    }
+    RedisReplyPtr execute(int argc, const char** argv, const size_t* argvlen);
 
 private:
-    void close() {
-        if (ctx_) {
-            redisFree(ctx_);
-            ctx_ = nullptr;
-        }
-    }
+    bool reconnect_once();
+    bool ensure_connected();
+    void close();
+
     redisContext* ctx_ = nullptr;
+    std::shared_ptr<const RedisConfig> config_;
 };
 
 // 连接池统计信息
@@ -128,6 +122,8 @@ public:
 
 private:
     RedisConnection create_connection();
+    static RedisConnection create_connection(const RedisConfig& config);
+    void decrement_total_connections();
     void maintain_pool();
 
     RedisConfig config_;

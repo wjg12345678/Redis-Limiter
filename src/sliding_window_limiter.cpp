@@ -5,20 +5,23 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace rrl {
 namespace {
 
 constexpr const char* kSlidingWindowLua = R"lua(
 local key = KEYS[1]
-local now_ms = tonumber(ARGV[1])
-local window_ms = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4])
-local consume = tonumber(ARGV[5])
-local member = ARGV[6]
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local window_ms = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
+local consume = tonumber(ARGV[4])
+local member = ARGV[5]
 local min_score = now_ms - window_ms
 
 redis.call('ZREMRANGEBYSCORE', key, 0, min_score)
@@ -56,11 +59,12 @@ return {allowed, current, remaining, reset_after, retry_after}
 
 constexpr const char* kTokenBucketLua = R"lua(
 local key = KEYS[1]
-local now_ms = tonumber(ARGV[1])
-local capacity = tonumber(ARGV[2])
-local refill_per_ms = tonumber(ARGV[3])
-local requested = tonumber(ARGV[4])
-local consume = tonumber(ARGV[5])
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local capacity = tonumber(ARGV[1])
+local refill_per_ms = tonumber(ARGV[2])
+local requested = tonumber(ARGV[3])
+local consume = tonumber(ARGV[4])
 
 local state = redis.call('HMGET', key, 'tokens', 'last_ms')
 local tokens = tonumber(state[1])
@@ -114,12 +118,6 @@ end
 return {allowed, remaining, reset_after, retry_after}
 )lua";
 
-std::int64_t now_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 RedisReplyPtr eval_script(RedisConnection& conn,
                           const std::string& script,
                           const std::vector<std::string>& keys,
@@ -155,10 +153,14 @@ int require_integer(const redisReply* reply, size_t index) {
     return static_cast<int>(item->integer);
 }
 
-std::string make_member_id(std::int64_t timestamp_ms, int cost) {
+std::string make_member_id(int cost) {
+    static const auto process_nonce = [] {
+        std::random_device device;
+        return (static_cast<std::uint64_t>(device()) << 32) ^ device();
+    }();
     static std::atomic<std::uint64_t> sequence{0};
     std::ostringstream builder;
-    builder << timestamp_ms
+    builder << process_nonce
             << "-"
             << cost
             << "-"
@@ -204,6 +206,42 @@ RedisReplyPtr load_script(RedisConnection& conn, const std::string& script) {
     return conn.execute(3, argv, argvlen);
 }
 
+std::shared_ptr<const std::string> load_and_cache_script_sha(
+    RedisConnection& conn,
+    const std::string& script,
+    std::shared_ptr<const std::string>& sha_cache) {
+    auto load_reply = load_script(conn, script);
+    if (!load_reply) {
+        return nullptr;
+    }
+    if (load_reply->type == REDIS_REPLY_ERROR) {
+        throw std::runtime_error(load_reply->str ? load_reply->str : "Redis SCRIPT LOAD error");
+    }
+
+    auto loaded_sha = std::make_shared<const std::string>(require_string(load_reply.get()));
+    std::atomic_store_explicit(&sha_cache, loaded_sha, std::memory_order_release);
+    return loaded_sha;
+}
+
+std::shared_ptr<const std::string> ensure_script_sha(
+    RedisConnection& conn,
+    const std::string& script,
+    std::shared_ptr<const std::string>& sha_cache,
+    std::mutex& script_mutex) {
+    auto cached_sha = std::atomic_load_explicit(&sha_cache, std::memory_order_acquire);
+    if (cached_sha) {
+        return cached_sha;
+    }
+
+    std::lock_guard<std::mutex> script_lock(script_mutex);
+    cached_sha = std::atomic_load_explicit(&sha_cache, std::memory_order_acquire);
+    if (cached_sha) {
+        return cached_sha;
+    }
+
+    return load_and_cache_script_sha(conn, script, sha_cache);
+}
+
 RedisReplyPtr evalsha_script(RedisConnection& conn,
                              const std::string& sha,
                              const std::vector<std::string>& keys,
@@ -230,42 +268,41 @@ RedisReplyPtr evalsha_script(RedisConnection& conn,
 
 RedisReplyPtr eval_cached_script(RedisConnection& conn,
                                  const std::string& script,
-                                 std::string& sha,
+                                 std::shared_ptr<const std::string>& sha_cache,
+                                 std::mutex& script_mutex,
                                  const std::vector<std::string>& keys,
                                  const std::vector<std::string>& args) {
-    if (sha.empty()) {
-        auto load_reply = load_script(conn, script);
-        if (!load_reply) {
-            return RedisReplyPtr(nullptr, free_redis_reply);
-        }
-        if (load_reply->type == REDIS_REPLY_ERROR) {
-            throw std::runtime_error(load_reply->str ? load_reply->str : "Redis SCRIPT LOAD error");
-        }
-        sha = require_string(load_reply.get());
+    // Keep the Redis EVALSHA path outside script_mutex; the mutex only guards SHA cache reloads.
+    auto sha = ensure_script_sha(conn, script, sha_cache, script_mutex);
+    if (!sha) {
+        return RedisReplyPtr(nullptr, free_redis_reply);
     }
 
-    auto reply = evalsha_script(conn, sha, keys, args);
+    auto reply = evalsha_script(conn, *sha, keys, args);
     if (!reply) {
         return reply;
     }
     if (is_noscript_error(reply.get())) {
-        auto load_reply = load_script(conn, script);
-        if (!load_reply) {
-            return RedisReplyPtr(nullptr, free_redis_reply);
+        std::shared_ptr<const std::string> current_sha;
+        {
+            std::lock_guard<std::mutex> script_lock(script_mutex);
+            current_sha = std::atomic_load_explicit(&sha_cache, std::memory_order_acquire);
+            if (!current_sha || current_sha == sha) {
+                current_sha = load_and_cache_script_sha(conn, script, sha_cache);
+                if (!current_sha) {
+                    return RedisReplyPtr(nullptr, free_redis_reply);
+                }
+            }
         }
-        if (load_reply->type == REDIS_REPLY_ERROR) {
-            throw std::runtime_error(load_reply->str ? load_reply->str : "Redis SCRIPT LOAD error");
-        }
-        sha = require_string(load_reply.get());
-        reply = evalsha_script(conn, sha, keys, args);
+        reply = evalsha_script(conn, *current_sha, keys, args);
     }
     return reply;
 }
 
 RateLimitResult execute_sliding_window_script(RedisConnection& conn,
-                                              std::string& script_sha,
+                                              std::shared_ptr<const std::string>& script_sha,
+                                              std::mutex& script_mutex,
                                               const std::string& redis_key,
-                                              std::int64_t timestamp_ms,
                                               int window_size_ms,
                                               int max_requests,
                                               int effective_cost,
@@ -273,13 +310,13 @@ RateLimitResult execute_sliding_window_script(RedisConnection& conn,
     auto reply = eval_cached_script(conn,
                                     kSlidingWindowLua,
                                     script_sha,
+                                    script_mutex,
                                     {redis_key},
-                                    {std::to_string(timestamp_ms),
-                                     std::to_string(window_size_ms),
+                                    {std::to_string(window_size_ms),
                                      std::to_string(max_requests),
                                      std::to_string(effective_cost),
                                      consume ? "1" : "0",
-                                     make_member_id(timestamp_ms, effective_cost)});
+                                     make_member_id(effective_cost)});
 
     if (!reply) {
         return make_unavailable_result();
@@ -373,15 +410,13 @@ RateLimitResult SlidingWindowLimiter::check_sliding_window(const std::string& ke
         return make_unavailable_result();
     }
 
-    const auto timestamp_ms = now_ms();
     const bool consume = cost > 0;
     const int effective_cost = consume ? cost : 1;
     const std::string redis_key = local_config.key_prefix + key;
-    std::lock_guard<std::mutex> script_lock(script_mutex_);
     return execute_sliding_window_script(*guard,
                                          script_sha_,
+                                         script_mutex_,
                                          redis_key,
-                                         timestamp_ms,
                                          local_config.window_size_ms,
                                          local_config.max_requests,
                                          effective_cost,
@@ -459,19 +494,15 @@ RateLimitResult TokenBucketLimiter::execute_bucket_script(const std::string& key
 
     const std::string redis_key = key_prefix_ + key;
     const double refill_per_ms = refill_rate / 1000.0;
-    RedisReplyPtr reply(nullptr, free_redis_reply);
-    {
-        std::lock_guard<std::mutex> script_lock(script_mutex_);
-        reply = eval_cached_script(*guard,
-                                   kTokenBucketLua,
-                                   script_sha_,
-                                   {redis_key},
-                                   {std::to_string(now_ms()),
-                                    std::to_string(max_tokens),
-                                    std::to_string(refill_per_ms),
-                                    std::to_string(tokens_needed),
-                                    consume ? "1" : "0"});
-    }
+    auto reply = eval_cached_script(*guard,
+                                    kTokenBucketLua,
+                                    script_sha_,
+                                    script_mutex_,
+                                    {redis_key},
+                                    {std::to_string(max_tokens),
+                                     std::to_string(refill_per_ms),
+                                     std::to_string(tokens_needed),
+                                     consume ? "1" : "0"});
 
     if (!reply) {
         return make_unavailable_result();

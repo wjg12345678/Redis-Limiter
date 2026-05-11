@@ -30,9 +30,9 @@ PYBIND11_MODULE(redis_limiter, m) {
         .def_readonly("failed_requests", &PoolStatsSnapshot::failed_requests);
 
     py::class_<RedisPool, std::shared_ptr<RedisPool>>(m, "RedisPool")
-        .def(py::init<const RedisConfig&>())
-        .def("health_check", &RedisPool::health_check)
-        .def("resize", &RedisPool::resize)
+        .def(py::init<const RedisConfig&>(), py::call_guard<py::gil_scoped_release>())
+        .def("health_check", &RedisPool::health_check, py::call_guard<py::gil_scoped_release>())
+        .def("resize", &RedisPool::resize, py::call_guard<py::gil_scoped_release>())
         .def("get_stats", &RedisPool::get_stats);
 
     py::class_<RateLimitConfig>(m, "RateLimitConfig")
@@ -67,14 +67,16 @@ PYBIND11_MODULE(redis_limiter, m) {
              py::arg("config") = RateLimitConfig{})
         .def("allow",
              py::overload_cast<const std::string&>(&SlidingWindowLimiter::allow),
-             py::arg("key"))
+             py::arg("key"),
+             py::call_guard<py::gil_scoped_release>())
         .def("allow",
              py::overload_cast<const std::string&, int>(&SlidingWindowLimiter::allow),
              py::arg("key"),
-             py::arg("cost"))
-        .def("peek", &SlidingWindowLimiter::peek)
-        .def("reset", &SlidingWindowLimiter::reset)
-        .def("allow_batch", &SlidingWindowLimiter::allow_batch)
+             py::arg("cost"),
+             py::call_guard<py::gil_scoped_release>())
+        .def("peek", &SlidingWindowLimiter::peek, py::call_guard<py::gil_scoped_release>())
+        .def("reset", &SlidingWindowLimiter::reset, py::call_guard<py::gil_scoped_release>())
+        .def("allow_batch", &SlidingWindowLimiter::allow_batch, py::call_guard<py::gil_scoped_release>())
         .def("update_config", &SlidingWindowLimiter::update_config);
 
     py::class_<TokenBucketLimiter, std::shared_ptr<TokenBucketLimiter>>(m, "TokenBucketLimiter")
@@ -85,13 +87,15 @@ PYBIND11_MODULE(redis_limiter, m) {
              py::arg("key_prefix") = "tokenbucket:")
         .def("allow",
              py::overload_cast<const std::string&>(&TokenBucketLimiter::allow),
-             py::arg("key"))
+             py::arg("key"),
+             py::call_guard<py::gil_scoped_release>())
         .def("allow",
              py::overload_cast<const std::string&, int>(&TokenBucketLimiter::allow),
              py::arg("key"),
-             py::arg("tokens_needed"))
-        .def("peek", &TokenBucketLimiter::peek)
-        .def("reset", &TokenBucketLimiter::reset)
+             py::arg("tokens_needed"),
+             py::call_guard<py::gil_scoped_release>())
+        .def("peek", &TokenBucketLimiter::peek, py::call_guard<py::gil_scoped_release>())
+        .def("reset", &TokenBucketLimiter::reset, py::call_guard<py::gil_scoped_release>())
         .def("update_limits", &TokenBucketLimiter::update_limits);
 
     py::class_<LocalTokenBucketLimiter>(m, "LocalTokenBucketLimiter")
@@ -100,11 +104,13 @@ PYBIND11_MODULE(redis_limiter, m) {
              py::arg("refill_rate") = 10.0)
         .def("allow",
              py::overload_cast<const std::string&>(&LocalTokenBucketLimiter::allow),
-             py::arg("key"))
+             py::arg("key"),
+             py::call_guard<py::gil_scoped_release>())
         .def("allow",
              py::overload_cast<const std::string&, int>(&LocalTokenBucketLimiter::allow),
              py::arg("key"),
-             py::arg("tokens_needed"))
+             py::arg("tokens_needed"),
+             py::call_guard<py::gil_scoped_release>())
         .def("update_limits", &LocalTokenBucketLimiter::update_limits);
 
     py::class_<ResilientTokenBucketLimiter, std::shared_ptr<ResilientTokenBucketLimiter>>(
@@ -116,11 +122,13 @@ PYBIND11_MODULE(redis_limiter, m) {
              py::arg("local_refill_rate") = 5.0)
         .def("allow",
              py::overload_cast<const std::string&>(&ResilientTokenBucketLimiter::allow),
-             py::arg("key"))
+             py::arg("key"),
+             py::call_guard<py::gil_scoped_release>())
         .def("allow",
              py::overload_cast<const std::string&, int>(&ResilientTokenBucketLimiter::allow),
              py::arg("key"),
-             py::arg("tokens_needed"))
+             py::arg("tokens_needed"),
+             py::call_guard<py::gil_scoped_release>())
         .def("update_fallback_mode", &ResilientTokenBucketLimiter::update_fallback_mode)
         .def("fallback_mode", &ResilientTokenBucketLimiter::fallback_mode)
         .def("redis_error_count", &ResilientTokenBucketLimiter::redis_error_count)
@@ -130,12 +138,14 @@ PYBIND11_MODULE(redis_limiter, m) {
         .def_static("create_sliding_window",
                     &RateLimiterFactory::create_sliding_window,
                     py::arg("redis_config"),
-                    py::arg("rate_config") = RateLimitConfig{})
+                    py::arg("rate_config") = RateLimitConfig{},
+                    py::call_guard<py::gil_scoped_release>())
         .def_static("create_token_bucket",
                     &RateLimiterFactory::create_token_bucket,
                     py::arg("redis_config"),
                     py::arg("max_tokens") = 100,
-                    py::arg("refill_rate") = 10.0)
+                    py::arg("refill_rate") = 10.0,
+                    py::call_guard<py::gil_scoped_release>())
         .def_static("create_resilient_token_bucket",
                     &RateLimiterFactory::create_resilient_token_bucket,
                     py::arg("redis_config"),
@@ -143,5 +153,6 @@ PYBIND11_MODULE(redis_limiter, m) {
                     py::arg("refill_rate") = 10.0,
                     py::arg("fallback_mode") = FallbackMode::LocalTokenBucket,
                     py::arg("local_max_tokens") = 50,
-                    py::arg("local_refill_rate") = 5.0);
+                    py::arg("local_refill_rate") = 5.0,
+                    py::call_guard<py::gil_scoped_release>());
 }

@@ -44,11 +44,19 @@ def main() -> int:
     if any(status != "Healthy" for status in statuses):
         raise AssertionError(f"unexpected backend statuses: {statuses}")
 
+    sms_response = httpx.post(
+        f"{base_url}/sms/send-code",
+        json={"phone": "13800000000", "user_id": "smoke-user", "scene": "login"},
+        timeout=2.0,
+    )
+    if sms_response.status_code != 200:
+        raise AssertionError(f"unexpected sms response: status={sms_response.status_code} body={sms_response.text}")
+
     metrics = httpx.get(f"{base_url}/metrics", timeout=2.0)
     if metrics.status_code != 200:
         raise AssertionError(f"unexpected metrics response: status={metrics.status_code} body={metrics.text}")
     body = metrics.text
-    if "demo_rate_limit_requests_total 3" not in body:
+    if "demo_rate_limit_requests_total 4" not in body:
         raise AssertionError("metrics endpoint did not expose expected request count")
     if "demo_redis_health 1" not in body:
         raise AssertionError("metrics endpoint did not expose healthy redis status")

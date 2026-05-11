@@ -25,6 +25,7 @@ def main() -> None:
     redis_config.host = os.getenv("REDIS_HOST", "127.0.0.1")
     redis_config.port = int(os.getenv("REDIS_PORT", "6379"))
     redis_config.pool_size = 4
+    redis_config.max_retries = int(os.getenv("REDIS_MAX_RETRIES", "3"))
 
     pool = redis_limiter.RedisPool(redis_config)
     limiter = redis_limiter.ResilientTokenBucketLimiter(

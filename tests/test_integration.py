@@ -12,9 +12,16 @@ def build_redis_config(host: str = "redis") -> redis_limiter.RedisConfig:
     config = redis_limiter.RedisConfig()
     config.host = host
     config.port = 6379
-    config.pool_size = 4
-    config.connect_timeout_ms = 200
-    config.socket_timeout_ms = 200
+    if host == "redis":
+        config.pool_size = 4
+        config.connect_timeout_ms = 200
+        config.socket_timeout_ms = 200
+        config.max_retries = 1
+    else:
+        config.pool_size = 1
+        config.connect_timeout_ms = 50
+        config.socket_timeout_ms = 50
+        config.max_retries = 0
     return config
 
 
@@ -117,6 +124,10 @@ def test_fastapi_demo_limits_requests() -> None:
 def test_fastapi_demo_exposes_fallback_state() -> None:
     app = create_app(
         redis_host="redis-unavailable",
+        redis_pool_size=1,
+        redis_connect_timeout_ms=50,
+        redis_socket_timeout_ms=50,
+        redis_max_retries=0,
         max_tokens=2,
         refill_rate=0.01,
         local_max_tokens=1,
@@ -163,3 +174,92 @@ def test_fastapi_demo_exposes_metrics() -> None:
     assert "demo_rate_limit_allowed_total 2" in body
     assert "demo_rate_limit_denied_total 1" in body
     assert "demo_redis_health 1" in body
+
+
+def test_sms_send_code_limits_by_phone() -> None:
+    app = create_app(
+        redis_host="redis",
+        sms_key_prefix=f"pytest:sms:phone:{int(time.time() * 1000)}:",
+        sms_phone_max_tokens=1,
+        sms_phone_refill_rate=0.01,
+        sms_user_max_tokens=10,
+        sms_user_refill_rate=10.0,
+        sms_ip_max_tokens=10,
+        sms_ip_refill_rate=10.0,
+    )
+    client = TestClient(app)
+
+    payload = {"phone": "13800000000", "user_id": "user-1", "scene": "login"}
+    first = client.post("/sms/send-code", json=payload)
+    second = client.post("/sms/send-code", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "sent"
+    assert [item["rule"] for item in first.json()["rate_limits"]] == [
+        "phone_per_minute",
+        "user_per_hour",
+        "ip_per_minute",
+    ]
+    assert second.status_code == 429
+    detail = second.json()["detail"]
+    assert detail["blocked_rule"] == "phone_per_minute"
+    assert detail["rate_limits"][0]["backend_status"] == "Healthy"
+    assert detail["rate_limits"][0]["retry_after_ms"] > 0
+
+
+def test_sms_send_code_limits_by_ip() -> None:
+    app = create_app(
+        redis_host="redis",
+        sms_key_prefix=f"pytest:sms:ip:{int(time.time() * 1000)}:",
+        sms_phone_max_tokens=10,
+        sms_phone_refill_rate=10.0,
+        sms_user_max_tokens=10,
+        sms_user_refill_rate=10.0,
+        sms_ip_max_tokens=2,
+        sms_ip_refill_rate=0.01,
+    )
+    client = TestClient(app)
+
+    responses = [
+        client.post(
+            "/sms/send-code",
+            json={"phone": f"1380000000{idx}", "user_id": f"user-{idx}", "scene": "login"},
+        )
+        for idx in range(3)
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200, 429]
+    detail = responses[2].json()["detail"]
+    assert detail["blocked_rule"] == "ip_per_minute"
+    assert detail["rate_limits"][-1]["rule"] == "ip_per_minute"
+    assert detail["rate_limits"][-1]["backend_status"] == "Healthy"
+
+
+def test_sms_send_code_uses_fallback_when_redis_unavailable() -> None:
+    app = create_app(
+        redis_host="redis-unavailable",
+        redis_pool_size=1,
+        redis_connect_timeout_ms=50,
+        redis_socket_timeout_ms=50,
+        redis_max_retries=0,
+        sms_key_prefix=f"pytest:sms:fallback:{int(time.time() * 1000)}:",
+        sms_phone_max_tokens=1,
+        sms_phone_refill_rate=0.01,
+        sms_user_max_tokens=10,
+        sms_user_refill_rate=10.0,
+        sms_ip_max_tokens=10,
+        sms_ip_refill_rate=10.0,
+    )
+    client = TestClient(app)
+
+    payload = {"phone": "13900000000", "user_id": "user-fallback", "scene": "login"}
+    first = client.post("/sms/send-code", json=payload)
+    second = client.post("/sms/send-code", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["rate_limits"][0]["backend_status"] == "Fallback"
+    assert second.status_code == 429
+    detail = second.json()["detail"]
+    assert detail["blocked_rule"] == "phone_per_minute"
+    assert detail["rate_limits"][0]["backend_status"] == "Fallback"
+    assert detail["rate_limits"][0]["fallback_hit_count"] >= 2

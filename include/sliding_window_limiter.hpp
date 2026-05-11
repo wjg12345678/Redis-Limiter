@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -65,7 +66,7 @@ private:
     RateLimitConfig config_;
     mutable std::mutex config_mutex_;
     mutable std::mutex script_mutex_;
-    std::string script_sha_;
+    std::shared_ptr<const std::string> script_sha_;
 
     // 使用Redis Lua脚本实现原子性滑动窗口
     RateLimitResult check_sliding_window(const std::string& key, int cost);
@@ -94,7 +95,7 @@ private:
     std::string key_prefix_;
     mutable std::mutex config_mutex_;
     mutable std::mutex script_mutex_;
-    std::string script_sha_;
+    std::shared_ptr<const std::string> script_sha_;
 };
 
 enum class FallbackMode {

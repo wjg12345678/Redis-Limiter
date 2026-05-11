@@ -254,17 +254,17 @@
     <header>
       <h1>压测报告</h1>
       <p class="subhead">Redis 分布式限流组件</p>
-      <p class="meta">日期：2026-04-10</p>
+      <p class="meta">日期：2026-05-11</p>
     </header>
 
     <section class="hero">
       <div class="panel">
         <h2>一页结论</h2>
         <ul class="bullets">
-          <li>当前 Docker 测试环境下，Redis 令牌桶限流吞吐约为 <code>12.6k</code> 到 <code>13.0k QPS</code>。</li>
+          <li>当前 Docker 测试环境下，Redis 令牌桶限流吞吐约为 <code>7.1k</code> 到 <code>19.5k QPS</code>。</li>
           <li>热点 key 严格有效性压测中，理论最大放行 <code>45</code> 次，实际放行 <code>45</code> 次。</li>
           <li><code>over_issued=0.00</code>，本次压测没有观察到超发。</li>
-          <li>功能验证、FastAPI 接入、指标导出、<code>pytest</code> 回归测试全部通过。</li>
+          <li>功能验证、FastAPI 接入、短信验证码防刷、指标导出、<code>pytest</code> 回归测试全部通过。</li>
         </ul>
       </div>
       <div class="panel">
@@ -272,11 +272,11 @@
         <div class="stats">
           <div class="stat">
             <div class="label">吞吐范围</div>
-            <div class="value">12.6k+</div>
+            <div class="value">7.1k-19.5k</div>
           </div>
           <div class="stat">
             <div class="label">热点 key QPS</div>
-            <div class="value">12991</div>
+            <div class="value">19475</div>
           </div>
           <div class="stat">
             <div class="label">理论放行</div>
@@ -302,7 +302,7 @@
             <tr><td>Redis</td><td><code>redis:7-alpine</code></td></tr>
             <tr><td>应用栈</td><td><code>C++17 + hiredis + pybind11 + FastAPI</code></td></tr>
             <tr><td>限流路径</td><td>Redis Lua Token Bucket</td></tr>
-            <tr><td>验证链路</td><td><code>test</code>、<code>pytest</code>、<code>bench</code>、<code>/metrics</code></td></tr>
+            <tr><td>验证链路</td><td><code>test</code>、<code>smoke</code>、<code>pytest</code>、<code>bench</code>、<code>/metrics</code>、<code>/sms/send-code</code></td></tr>
           </tbody>
         </table>
         <div class="panel" style="padding:16px;">
@@ -325,18 +325,18 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>独立 key</td><td>4</td><td>5s</td><td>62945</td><td>12589.00</td><td>316.24</td><td>571.30</td><td>823.68</td><td>0</td></tr>
-          <tr><td>热点 key</td><td>4</td><td>5s</td><td>64957</td><td>12991.40</td><td>304.11</td><td>447.45</td><td>751.25</td><td>0</td></tr>
+          <tr><td>独立 key</td><td>4</td><td>5s</td><td>35278</td><td>7055.60</td><td>559.81</td><td>928.17</td><td>2769.85</td><td>0</td></tr>
+          <tr><td>热点 key</td><td>4</td><td>5s</td><td>97376</td><td>19475.20</td><td>215.67</td><td>329.48</td><td>653.82</td><td>0</td></tr>
         </tbody>
       </table>
       <div class="charts">
         <div class="chart-card">
           <img src="../assets/charts/throughput-qps.svg" alt="吞吐 QPS 对比图" />
-          <div class="caption">QPS 对比：两组场景都稳定在 12k+，热点 key 未出现明显下降。</div>
+          <div class="caption">QPS 对比：本次短压测中热点 key 约 19.5k QPS，独立 key 约 7.1k QPS。</div>
         </div>
         <div class="chart-card">
           <img src="../assets/charts/throughput-p95.svg" alt="吞吐 P95 延迟图" />
-          <div class="caption">P95 延迟对比：当前这组数据下，热点 key 延迟没有明显恶化。</div>
+          <div class="caption">P95 延迟对比：当前 Docker 环境下热点 key P95 更低，结果仅作为短压测快照。</div>
         </div>
       </div>
     </section>
@@ -350,7 +350,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>热点 key</td><td>4</td><td>5s</td><td>20</td><td>5/s</td><td>45.00</td><td>45</td><td>0.00</td><td>0.000000</td><td>0.9991</td><td>PASS</td></tr>
+          <tr><td>热点 key</td><td>4</td><td>5s</td><td>20</td><td>5/s</td><td>45.00</td><td>45</td><td>0.00</td><td>0.000000</td><td>0.9995</td><td>PASS</td></tr>
         </tbody>
       </table>
       <div class="charts">
@@ -372,7 +372,8 @@
         <div class="check"><div class="name">Redis 故障降级</div><div class="result">PASS</div></div>
         <div class="check"><div class="name">FastAPI /healthz</div><div class="result">PASS</div></div>
         <div class="check"><div class="name">FastAPI /metrics</div><div class="result">PASS</div></div>
-        <div class="check"><div class="name">pytest 集成测试</div><div class="result">5 PASS</div></div>
+        <div class="check"><div class="name">FastAPI /sms/send-code</div><div class="result">PASS</div></div>
+        <div class="check"><div class="name">pytest 集成测试</div><div class="result">9 PASS</div></div>
         <div class="check"><div class="name">有效性断言</div><div class="result">PASS</div></div>
       </div>
     </section>
@@ -384,6 +385,7 @@ docker compose up -d redis
 
 docker compose run --rm test remote
 docker compose run --rm -e REDIS_HOST=redis-unavailable test fallback
+docker compose run --rm smoke
 docker compose run --rm pytest
 
 docker compose run --rm bench --workers 4 --duration 5
@@ -401,7 +403,7 @@ docker compose run --rm bench \
     </section>
 
     <p class="footer">
-      总结：这份报告证明了项目不仅实现了 Redis 分布式限流，还补齐了 FastAPI 接入、指标导出、自动化测试、CI 和严格有效性压测。
+      总结：这份报告证明了项目不仅实现了 Redis 分布式限流，还补齐了 FastAPI 接入、短信验证码防刷、指标导出、自动化测试、CI 和严格有效性压测。
       从秋招项目角度看，这份 HTML 可以直接浏览、截图或导出 PDF，用于展示性能结果与工程完整度。
     </p>
   </main>

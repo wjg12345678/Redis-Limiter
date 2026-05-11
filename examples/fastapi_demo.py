@@ -4,18 +4,34 @@ import time
 from typing import Literal
 
 import redis_limiter
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 
-def build_redis_config(host: str | None = None, port: int | None = None) -> redis_limiter.RedisConfig:
+def build_redis_config(
+    host: str | None = None,
+    port: int | None = None,
+    pool_size: int | None = None,
+    connect_timeout_ms: int | None = None,
+    socket_timeout_ms: int | None = None,
+    max_retries: int | None = None,
+) -> redis_limiter.RedisConfig:
     config = redis_limiter.RedisConfig()
     config.host = host or os.getenv("REDIS_HOST", "127.0.0.1")
     config.port = port or int(os.getenv("REDIS_PORT", "6379"))
-    config.pool_size = int(os.getenv("REDIS_POOL_SIZE", "8"))
-    config.connect_timeout_ms = int(os.getenv("REDIS_CONNECT_TIMEOUT_MS", "200"))
-    config.socket_timeout_ms = int(os.getenv("REDIS_SOCKET_TIMEOUT_MS", "200"))
+    config.pool_size = pool_size if pool_size is not None else int(os.getenv("REDIS_POOL_SIZE", "8"))
+    config.connect_timeout_ms = (
+        connect_timeout_ms
+        if connect_timeout_ms is not None
+        else int(os.getenv("REDIS_CONNECT_TIMEOUT_MS", "200"))
+    )
+    config.socket_timeout_ms = (
+        socket_timeout_ms
+        if socket_timeout_ms is not None
+        else int(os.getenv("REDIS_SOCKET_TIMEOUT_MS", "200"))
+    )
+    config.max_retries = max_retries if max_retries is not None else int(os.getenv("REDIS_MAX_RETRIES", "3"))
     return config
 
 
@@ -76,6 +92,34 @@ class CreateOrderResponse(BaseModel):
     inventory_reserved: bool
     persistence_backend: str
     rate_limit: RateLimitResponse
+
+
+class SendSmsCodeRequest(BaseModel):
+    phone: str = Field(..., min_length=5, max_length=32)
+    user_id: str = Field(..., min_length=1)
+    scene: str = Field(default="login", min_length=1, max_length=32)
+
+
+class SmsRuleResult(BaseModel):
+    rule: Literal["phone_per_minute", "user_per_hour", "ip_per_minute"]
+    key: str
+    allowed: bool
+    remaining: int
+    retry_after_ms: int
+    backend_status: Literal["Healthy", "Unavailable", "Fallback"]
+    fallback_mode: Literal["FailOpen", "FailClosed", "LocalTokenBucket"]
+    redis_error_count: int
+    fallback_hit_count: int
+
+
+class SendSmsCodeResponse(BaseModel):
+    message_id: str
+    status: Literal["sent"]
+    phone: str
+    user_id: str
+    scene: str
+    gateway_backend: str
+    rate_limits: list[SmsRuleResult]
 
 
 class DemoMetrics:
@@ -170,6 +214,26 @@ class FakeOrderRepository:
         }
 
 
+class FakeSmsGateway:
+    def __init__(self, backend_name: str = "mock-sms-gateway") -> None:
+        self.backend_name = backend_name
+        self._lock = threading.Lock()
+        self._sequence = 0
+
+    def send_code(self, *, phone: str, user_id: str, scene: str) -> dict[str, object]:
+        with self._lock:
+            self._sequence += 1
+            message_id = f"sms-{self._sequence:06d}"
+        return {
+            "message_id": message_id,
+            "status": "sent",
+            "phone": phone,
+            "user_id": user_id,
+            "scene": scene,
+            "gateway_backend": self.backend_name,
+        }
+
+
 def build_rate_limit_response(
     *,
     limiter: redis_limiter.ResilientTokenBucketLimiter,
@@ -190,6 +254,26 @@ def build_rate_limit_response(
     )
 
 
+def build_sms_rule_result(
+    *,
+    rule: Literal["phone_per_minute", "user_per_hour", "ip_per_minute"],
+    key: str,
+    limiter: redis_limiter.ResilientTokenBucketLimiter,
+    result: redis_limiter.RateLimitResult,
+) -> SmsRuleResult:
+    return SmsRuleResult(
+        rule=rule,
+        key=key,
+        allowed=result.allowed,
+        remaining=result.remaining,
+        retry_after_ms=result.retry_after_ms,
+        backend_status=backend_status_name(result.backend_status),
+        fallback_mode=fallback_mode_name(limiter.fallback_mode()),
+        redis_error_count=limiter.redis_error_count(),
+        fallback_hit_count=limiter.fallback_hit_count(),
+    )
+
+
 def create_app(
     *,
     redis_host: str | None = None,
@@ -200,10 +284,28 @@ def create_app(
     local_refill_rate: float | None = None,
     key_prefix: str | None = None,
     fallback_mode: str | None = None,
+    redis_pool_size: int | None = None,
+    redis_connect_timeout_ms: int | None = None,
+    redis_socket_timeout_ms: int | None = None,
+    redis_max_retries: int | None = None,
+    sms_key_prefix: str | None = None,
+    sms_phone_max_tokens: int | None = None,
+    sms_phone_refill_rate: float | None = None,
+    sms_user_max_tokens: int | None = None,
+    sms_user_refill_rate: float | None = None,
+    sms_ip_max_tokens: int | None = None,
+    sms_ip_refill_rate: float | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Redis Rate Limiter Demo", version="1.0.0")
 
-    redis_config = build_redis_config(redis_host, redis_port)
+    redis_config = build_redis_config(
+        redis_host,
+        redis_port,
+        pool_size=redis_pool_size,
+        connect_timeout_ms=redis_connect_timeout_ms,
+        socket_timeout_ms=redis_socket_timeout_ms,
+        max_retries=redis_max_retries,
+    )
     pool = redis_limiter.RedisPool(redis_config)
     remote = redis_limiter.TokenBucketLimiter(
         pool,
@@ -217,13 +319,50 @@ def create_app(
         local_max_tokens=local_max_tokens or int(os.getenv("LOCAL_MAX_TOKENS", "10")),
         local_refill_rate=local_refill_rate or float(os.getenv("LOCAL_REFILL_RATE", "2")),
     )
+    sms_fallback_mode = parse_fallback_mode(fallback_mode or os.getenv("RATE_LIMIT_FALLBACK_MODE", "LocalTokenBucket"))
+    sms_prefix = sms_key_prefix or os.getenv("SMS_RATE_LIMIT_KEY_PREFIX", "sms:tokenbucket:")
+
+    def create_sms_limiter(rule_prefix: str, tokens: int, refill: float) -> redis_limiter.ResilientTokenBucketLimiter:
+        remote_limiter = redis_limiter.TokenBucketLimiter(
+            pool,
+            max_tokens=tokens,
+            refill_rate=refill,
+            key_prefix=f"{sms_prefix}{rule_prefix}:",
+        )
+        return redis_limiter.ResilientTokenBucketLimiter(
+            remote_limiter,
+            sms_fallback_mode,
+            local_max_tokens=tokens,
+            local_refill_rate=refill,
+        )
+
+    sms_limiters: dict[str, redis_limiter.ResilientTokenBucketLimiter] = {
+        "phone_per_minute": create_sms_limiter(
+            "phone",
+            sms_phone_max_tokens or int(os.getenv("SMS_PHONE_MAX_TOKENS", "1")),
+            sms_phone_refill_rate or float(os.getenv("SMS_PHONE_REFILL_RATE", str(1 / 60))),
+        ),
+        "user_per_hour": create_sms_limiter(
+            "user",
+            sms_user_max_tokens or int(os.getenv("SMS_USER_MAX_TOKENS", "5")),
+            sms_user_refill_rate or float(os.getenv("SMS_USER_REFILL_RATE", str(5 / 3600))),
+        ),
+        "ip_per_minute": create_sms_limiter(
+            "ip",
+            sms_ip_max_tokens or int(os.getenv("SMS_IP_MAX_TOKENS", "20")),
+            sms_ip_refill_rate or float(os.getenv("SMS_IP_REFILL_RATE", str(20 / 60))),
+        ),
+    }
 
     metrics = DemoMetrics()
     repository = FakeOrderRepository()
+    sms_gateway = FakeSmsGateway()
     app.state.pool = pool
     app.state.limiter = limiter
+    app.state.sms_limiters = sms_limiters
     app.state.metrics = metrics
     app.state.repository = repository
+    app.state.sms_gateway = sms_gateway
 
     @app.get("/healthz")
     def healthz() -> dict[str, object]:
@@ -303,6 +442,65 @@ def create_app(
             duration_seconds=time.perf_counter() - started_at,
         )
         return CreateOrderResponse(rate_limit=rate_limit, **persisted)
+
+    @app.post("/sms/send-code", response_model=SendSmsCodeResponse)
+    def send_sms_code(payload: SendSmsCodeRequest, request: Request) -> SendSmsCodeResponse:
+        client_ip = request.client.host if request.client else "unknown"
+        started_at = time.perf_counter()
+        before_redis_errors = sum(item.redis_error_count() for item in sms_limiters.values())
+        before_fallback_hits = sum(item.fallback_hit_count() for item in sms_limiters.values())
+
+        rule_keys: list[tuple[Literal["phone_per_minute", "user_per_hour", "ip_per_minute"], str]] = [
+            ("phone_per_minute", f"{payload.scene}:phone:{payload.phone}"),
+            ("user_per_hour", f"{payload.scene}:user:{payload.user_id}"),
+            ("ip_per_minute", f"{payload.scene}:ip:{client_ip}"),
+        ]
+        rule_results: list[SmsRuleResult] = []
+
+        for rule, key in rule_keys:
+            rule_limiter = sms_limiters[rule]
+            result = rule_limiter.allow(key)
+            rule_result = build_sms_rule_result(
+                rule=rule,
+                key=key,
+                limiter=rule_limiter,
+                result=result,
+            )
+            rule_results.append(rule_result)
+            if not result.allowed:
+                after_redis_errors = sum(item.redis_error_count() for item in sms_limiters.values())
+                after_fallback_hits = sum(item.fallback_hit_count() for item in sms_limiters.values())
+                metrics.observe(
+                    allowed=False,
+                    redis_error_delta=after_redis_errors - before_redis_errors,
+                    fallback_delta=after_fallback_hits - before_fallback_hits,
+                    downstream_called=False,
+                    duration_seconds=time.perf_counter() - started_at,
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "message": "sms rate limit exceeded",
+                        "blocked_rule": rule,
+                        "rate_limits": [item.model_dump() for item in rule_results],
+                    },
+                )
+
+        sent = sms_gateway.send_code(
+            phone=payload.phone,
+            user_id=payload.user_id,
+            scene=payload.scene,
+        )
+        after_redis_errors = sum(item.redis_error_count() for item in sms_limiters.values())
+        after_fallback_hits = sum(item.fallback_hit_count() for item in sms_limiters.values())
+        metrics.observe(
+            allowed=True,
+            redis_error_delta=after_redis_errors - before_redis_errors,
+            fallback_delta=after_fallback_hits - before_fallback_hits,
+            downstream_called=True,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return SendSmsCodeResponse(rate_limits=rule_results, **sent)
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics_endpoint() -> PlainTextResponse:

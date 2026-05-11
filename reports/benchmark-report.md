@@ -2,14 +2,14 @@
 
 Redis 分布式限流组件
 
-日期：`2026-04-10`
+日期：`2026-05-11`
 
 ## 一页结论
 
-- 在当前 Docker 测试环境下，Redis 令牌桶限流的吞吐约为 `12.6k` 到 `13.0k QPS`
+- 在当前 Docker 测试环境下，Redis 令牌桶限流的吞吐约为 `7.1k` 到 `19.5k QPS`
 - 在热点 key 严格有效性压测下，理论最大放行 `45` 次，实际放行 `45` 次
 - `over_issued=0.00`，本次压测没有观察到超发
-- 功能验证、Docker 冒烟测试、FastAPI 接入、指标导出、`pytest` 回归测试均通过
+- 功能验证、Docker 冒烟测试、FastAPI 接入、短信验证码防刷、指标导出、`pytest` 回归测试均通过
 
 ## 压测范围
 
@@ -33,14 +33,14 @@ Redis 分布式限流组件
 | Redis | `redis:7-alpine` |
 | 应用栈 | `C++17 + hiredis + pybind11 + FastAPI` |
 | 限流路径 | Redis Lua Token Bucket (`SCRIPT LOAD + EVALSHA`) |
-| 验证链路 | `test`、`smoke`、`pytest`、`bench`、`/metrics` |
+| 验证链路 | `test`、`smoke`、`pytest`、`bench`、`/metrics`、`/sms/send-code` |
 
 ## 吞吐结果
 
 | 场景 | Workers | 时长 | 总请求数 | QPS | 平均延迟(us) | P95(us) | P99(us) | 错误数 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 独立 key | 4 | 5s | 62945 | 12589.00 | 316.24 | 571.30 | 823.68 | 0 |
-| 热点 key | 4 | 5s | 64957 | 12991.40 | 304.11 | 447.45 | 751.25 | 0 |
+| 独立 key | 4 | 5s | 35278 | 7055.60 | 559.81 | 928.17 | 2769.85 | 0 |
+| 热点 key | 4 | 5s | 97376 | 19475.20 | 215.67 | 329.48 | 653.82 | 0 |
 
 ![吞吐 QPS 对比](../assets/charts/throughput-qps.svg)
 
@@ -48,15 +48,15 @@ Redis 分布式限流组件
 
 结果解读：
 
-- 两组场景都稳定在 `12k+ QPS`
-- 这次压测里，热点 key 没有明显低于独立 key
+- 两组场景都没有错误，热点 key 本次约 `19.5k QPS`
+- 这次压测里，热点 key 明显高于独立 key；该结果与 Docker 环境、Redis 状态和 worker 调度有关，报告只作为同一环境下的短压测快照
 - 未观察到执行错误
 
 ## 限流有效性结果
 
 | 场景 | Workers | 时长 | Max Tokens | Refill Rate | 理论放行 | 实际放行 | 超发量 | 超发比例 | 拒绝率 | 断言结果 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 热点 key | 4 | 5s | 20 | 5/s | 45.00 | 45 | 0.00 | 0.000000 | 0.9991 | PASS |
+| 热点 key | 4 | 5s | 20 | 5/s | 45.00 | 45 | 0.00 | 0.000000 | 0.9995 | PASS |
 
 ![限流有效性柱状图](../assets/charts/effectiveness-bars.svg)
 
@@ -68,6 +68,7 @@ Redis 分布式限流组件
 - `over_issued=0.00`，本次压测未出现超发
 - 热点 key 场景能够覆盖 Redis Lua 原子扣减路径的并发竞争
 - 当前实现优先通过 `SCRIPT LOAD + EVALSHA` 执行 Lua 脚本
+- 本次严格有效性压测的总请求数为 `92941`，QPS 为 `18588.20`
 
 ## 验证快照
 
@@ -78,8 +79,9 @@ Redis 分布式限流组件
 | Docker smoke | PASS |
 | FastAPI `/healthz` | PASS |
 | FastAPI `/metrics` | PASS |
+| FastAPI `/sms/send-code` | PASS |
 | Prometheus 指标抓取 | PASS |
-| `pytest` 集成测试 | `5 passed in 71.06s` |
+| `pytest` 集成测试 | `9 passed in 0.53s` |
 | 限流有效性断言 | PASS |
 
 监控补充说明：
@@ -124,6 +126,7 @@ docker compose run --rm bench \
 - Redis 分布式配额共享
 - Lua 原子更新与脚本缓存执行
 - Python/FastAPI 业务接入
+- 短信验证码手机号 / 用户 / IP 多维防刷示例
 - Redis 故障降级
 - Docker 冒烟、自动化测试与 CI
 - 压测与有效性断言

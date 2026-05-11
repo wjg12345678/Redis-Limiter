@@ -25,10 +25,10 @@
 
   <g font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#756452">
     <text x="78" y="324">0</text>
-    <text x="58" y="278">3.5k</text>
-    <text x="58" y="232">7.0k</text>
-    <text x="52" y="186">10.5k</text>
-    <text x="52" y="140">14.0k</text>
+    <text x="58" y="278">5.0k</text>
+    <text x="52" y="232">10.0k</text>
+    <text x="52" y="186">15.0k</text>
+    <text x="52" y="140">20.0k</text>
   </g>
 
   <g stroke="#ebe1d3" stroke-width="1">
@@ -38,12 +38,12 @@
     <line x1="120" y1="136" x2="792" y2="136"/>
   </g>
 
-  <rect x="220" y="154.6" width="160" height="165.4" rx="20" fill="url(#barA)"/>
-  <rect x="532" y="149.3" width="160" height="170.7" rx="20" fill="url(#barB)"/>
+  <rect x="220" y="255.1" width="160" height="64.9" rx="20" fill="url(#barA)"/>
+  <rect x="532" y="140.8" width="160" height="179.2" rx="20" fill="url(#barB)"/>
 
   <g font-family="Helvetica, Arial, sans-serif" fill="#2e261e">
-    <text x="300" y="143" text-anchor="middle" font-size="20">12,589</text>
-    <text x="612" y="138" text-anchor="middle" font-size="20">12,991</text>
+    <text x="300" y="244" text-anchor="middle" font-size="20">7,056</text>
+    <text x="612" y="129" text-anchor="middle" font-size="20">19,475</text>
     <text x="300" y="351" text-anchor="middle" font-size="16">independent-key</text>
     <text x="612" y="351" text-anchor="middle" font-size="16">shared-key</text>
   </g>

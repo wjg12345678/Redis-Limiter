@@ -15,6 +15,7 @@ def build_redis_config() -> redis_limiter.RedisConfig:
     config.pool_size = int(os.getenv("REDIS_POOL_SIZE", "16"))
     config.connect_timeout_ms = int(os.getenv("REDIS_CONNECT_TIMEOUT_MS", "200"))
     config.socket_timeout_ms = int(os.getenv("REDIS_SOCKET_TIMEOUT_MS", "200"))
+    config.max_retries = int(os.getenv("REDIS_MAX_RETRIES", "3"))
     return config
 
 
