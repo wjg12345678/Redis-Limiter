@@ -1,0 +1,16 @@
+.git/
+.agents/
+.codex/
+.pytest_cache/
+build/
+build-*/
+reports/
+assets/
+grafana/
+prometheus/
+__pycache__/
+*.pyc
+*.o
+*.so
+*.log
+.DS_Store
