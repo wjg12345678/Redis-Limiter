@@ -750,6 +750,9 @@ Atlas 不再复制 `Redis-Limiter` 的源码。Atlas 只保留自己的业务适
 - [docs/interview-guide.md](docs/interview-guide.md)：面试讲稿和高频问答
 - [docs/interview-qa.md](docs/interview-qa.md)：完整面试题库和参考答案
 - [docs/resume-bullets.md](docs/resume-bullets.md)：简历 bullet 和项目描述
+- [docs/integration-guide.md](docs/integration-guide.md)：组件化接入指南
+- [docs/production-hardening-roadmap.md](docs/production-hardening-roadmap.md)：生产化加固与平台化路线
+- [docs/defense-playbook.md](docs/defense-playbook.md)：面试答辩攻防手册
 - [reports/benchmark-report.md](reports/benchmark-report.md)：压测报告
 - [reports/benchmark-report.html](reports/benchmark-report.html)：HTML 压测报告
 - [examples/python_demo.py](examples/python_demo.py)：普通 Python 调用示例
