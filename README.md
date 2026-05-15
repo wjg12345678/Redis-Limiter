@@ -745,6 +745,8 @@ Atlas 不再复制 `Redis-Limiter` 的源码。Atlas 只保留自己的业务适
 
 ## 文档索引
 
+- [docs/project-study-guide-complete.md](docs/project-study-guide-complete.md)：完整学习路线
+- [docs/interview-qna-complete.md](docs/interview-qna-complete.md)：面试完整问答
 - [docs/interview-guide.md](docs/interview-guide.md)：面试讲稿和高频问答
 - [docs/interview-qa.md](docs/interview-qa.md)：完整面试题库和参考答案
 - [docs/resume-bullets.md](docs/resume-bullets.md)：简历 bullet 和项目描述
