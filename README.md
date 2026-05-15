@@ -166,7 +166,7 @@ request
 |-- prometheus/                     # Prometheus 抓取配置
 |-- grafana/                        # Grafana datasource / dashboard provisioning
 |-- reports/                        # 压测报告
-|-- docs/                           # 简历材料和面试讲稿
+|-- docs/                           # 简历材料、面试讲稿和面试题库
 |-- CMakeLists.txt
 |-- Dockerfile
 `-- docker-compose.yml
@@ -746,6 +746,7 @@ Atlas 不再复制 `Redis-Limiter` 的源码。Atlas 只保留自己的业务适
 ## 文档索引
 
 - [docs/interview-guide.md](docs/interview-guide.md)：面试讲稿和高频问答
+- [docs/interview-qa.md](docs/interview-qa.md)：完整面试题库和参考答案
 - [docs/resume-bullets.md](docs/resume-bullets.md)：简历 bullet 和项目描述
 - [reports/benchmark-report.md](reports/benchmark-report.md)：压测报告
 - [reports/benchmark-report.html](reports/benchmark-report.html)：HTML 压测报告
